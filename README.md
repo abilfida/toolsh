@@ -5,4 +5,4 @@ sudo curl -fsSL https://raw.githubusercontent.com/abilfida/servprep/refs/heads/m
 
 
 Setup Domain NGINX
-sudo curl -fsSL https://raw.githubusercontent.com/abilfida/servprep/refs/heads/main/setup-domain-nginx.sh | sudo bash myapp.com admin@myapp.com 8080
+sudo curl -fsSL https://raw.githubusercontent.com/abilfida/servprep/refs/heads/main/setup-domain-nginx.sh | sudo bash -s -- myapp.com admin@myapp.com 8080
