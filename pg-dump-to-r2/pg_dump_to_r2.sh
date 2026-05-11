@@ -3,6 +3,15 @@
 # pg_dump_to_r2.sh
 # Dump PostgreSQL → Gzip → Upload ke Cloudflare R2 / S3 Object Storage
 # Semua konfigurasi dibaca dari environment variables
+#
+# FIX LOG:
+#  - [BUG1] trap cleanup EXIT dipindah SETELAH proses dump & upload selesai
+#           agar file tidak terhapus sebelum di-upload
+#  - [BUG2] Hapus double compression: pg_dump custom format sudah compress,
+#           tidak perlu di-pipe ke gzip lagi. Gunakan format plain + gzip.
+#  - [BUG3] Perbaiki rclone inline remote syntax untuk Cloudflare R2
+#  - [BUG4] Tambah exit code check setelah pg_dump agar tidak lanjut upload
+#           jika dump gagal
 # =============================================================================
 
 set -euo pipefail
@@ -37,6 +46,7 @@ LOCK_WAIT_TIMEOUT="${LOCK_WAIT_TIMEOUT:-120s}"
 # =============================================================================
 
 TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+# [BUG2 FIX] Gunakan format plain + gzip pipe (bukan custom+gzip double)
 DUMP_FILENAME="${DB_NAME}_${TIMESTAMP}.dump.gz"
 DUMP_PATH="${DUMP_DIR}/${DUMP_FILENAME}"
 LOG_FILE="${DUMP_DIR}/pg_dump_r2_${TIMESTAMP}.log"
@@ -64,6 +74,8 @@ check_dependency() {
     fi
 }
 
+# [BUG1 FIX] cleanup hanya hapus file dump sementara, dipanggil manual di akhir
+# TIDAK menggunakan trap EXIT agar file tidak terhapus sebelum upload selesai
 cleanup() {
     if [[ -f "$DUMP_PATH" ]]; then
         log INFO "Menghapus file dump sementara: $DUMP_PATH"
@@ -71,16 +83,23 @@ cleanup() {
     fi
 }
 
+# Trap hanya untuk error/interrupt — bukan EXIT normal
+trap 'log ERROR "Script dibatalkan."; cleanup; exit 1' INT TERM
+
 format_size() { du -sh "$1" 2>/dev/null | cut -f1; }
 
-# rclone inline remote — tidak perlu rclone.conf
-RCLONE_REMOTE=":s3,provider=Cloudflare,access_key_id=${R2_ACCESS_KEY_ID},secret_access_key=${R2_SECRET_ACCESS_KEY},endpoint=${R2_ENDPOINT},no_check_bucket=true:"
+# [BUG3 FIX] rclone remote syntax yang benar untuk Cloudflare R2
+# Gunakan named remote via env variable, bukan inline connection string
+export RCLONE_CONFIG_R2_TYPE=s3
+export RCLONE_CONFIG_R2_PROVIDER=Cloudflare
+export RCLONE_CONFIG_R2_ACCESS_KEY_ID="${R2_ACCESS_KEY_ID}"
+export RCLONE_CONFIG_R2_SECRET_ACCESS_KEY="${R2_SECRET_ACCESS_KEY}"
+export RCLONE_CONFIG_R2_ENDPOINT="${R2_ENDPOINT}"
+export RCLONE_CONFIG_R2_NO_CHECK_BUCKET=true
 
 # =============================================================================
 # MULAI
 # =============================================================================
-
-trap cleanup EXIT
 
 log STEP "============================================================"
 log STEP "  PG Dump to R2 | ghcr.io/abilfida/toolsh/pg-dump-to-r2"
@@ -120,15 +139,19 @@ log INFO "File output : $DUMP_PATH"
 
 START_TIME=$(date +%s)
 
+# [BUG2 FIX] Format plain lalu pipe ke gzip — tidak ada double compression
+# pg_dump format=plain menghasilkan SQL plain text, gzip mengkompresinya
+# Gunakan pipefail agar error pg_dump terdeteksi meski ada pipe ke gzip
+set -o pipefail
+
 PGPASSWORD="$DB_PASSWORD" pg_dump \
     -h "$DB_HOST" \
     -p "$DB_PORT" \
     -U "$DB_USER" \
     -d "$DB_NAME" \
-    --format=custom \
+    --format=plain \
     --no-owner \
     --no-acl \
-    --compress="${COMPRESS_LEVEL}" \
     --lock-wait-timeout="${LOCK_WAIT_TIMEOUT}" \
     --keepalives=1 \
     --keepalives-idle=60 \
@@ -136,6 +159,29 @@ PGPASSWORD="$DB_PASSWORD" pg_dump \
     --keepalives-count=5 \
     2>>"$LOG_FILE" \
     | gzip -"${COMPRESS_LEVEL}" > "$DUMP_PATH"
+
+# [BUG4 FIX] Cek exit code pipe — pastikan dump benar-benar sukses
+DUMP_EXIT=${PIPESTATUS[0]}
+GZIP_EXIT=${PIPESTATUS[1]}
+
+if [[ "$DUMP_EXIT" -ne 0 ]]; then
+    log ERROR "pg_dump gagal dengan exit code ${DUMP_EXIT}. Lihat log: ${LOG_FILE}"
+    cleanup
+    exit 1
+fi
+
+if [[ "$GZIP_EXIT" -ne 0 ]]; then
+    log ERROR "gzip gagal dengan exit code ${GZIP_EXIT}."
+    cleanup
+    exit 1
+fi
+
+# Validasi file tidak kosong
+if [[ ! -s "$DUMP_PATH" ]]; then
+    log ERROR "File dump kosong (0 bytes): ${DUMP_PATH}"
+    cleanup
+    exit 1
+fi
 
 END_TIME=$(date +%s)
 ELAPSED=$(( END_TIME - START_TIME ))
@@ -150,28 +196,39 @@ log STEP "[4/4] Mengupload ke Cloudflare R2..."
 
 UPLOAD_START=$(date +%s)
 
+# [BUG3 FIX] Gunakan named remote "R2:" yang dikonfigurasi via RCLONE_CONFIG_R2_*
 rclone copy \
     "$DUMP_PATH" \
-    "${RCLONE_REMOTE}${R2_BUCKET}/${R2_PREFIX}/" \
-    --s3-no-check-bucket \
-    --s3-force-path-style \
+    "R2:${R2_BUCKET}/${R2_PREFIX}/" \
     --transfers=1 \
     --retries=3 \
     --retries-sleep=10s \
     --stats=30s \
-    --log-file="$LOG_FILE" \
-    --log-level=INFO \
-    2>>"$LOG_FILE"
+    -v \
+    2>&1 | tee -a "$LOG_FILE"
+
+UPLOAD_EXIT=${PIPESTATUS[0]}
+if [[ "$UPLOAD_EXIT" -ne 0 ]]; then
+    log ERROR "Upload ke R2 gagal dengan exit code ${UPLOAD_EXIT}. Lihat log: ${LOG_FILE}"
+    cleanup
+    exit 1
+fi
 
 UPLOAD_END=$(date +%s)
 UPLOAD_ELAPSED=$(( UPLOAD_END - UPLOAD_START ))
 log OK "Upload ke R2 selesai dalam ${UPLOAD_ELAPSED}s."
 
 # =============================================================================
+# HAPUS FILE DUMP SEMENTARA (setelah upload sukses)
+# =============================================================================
+
+cleanup
+
+# =============================================================================
 # RETENSI: HAPUS FILE LAMA DI R2
 # =============================================================================
 
-if [[ "$RETENTION_DAYS" -gt 0 ]]; then
+if [[ "${RETENTION_DAYS}" -gt 0 ]]; then
     log INFO "Menerapkan retensi: hapus file lebih dari ${RETENTION_DAYS} hari..."
 
     CUTOFF_DATE=$(date -d "${RETENTION_DAYS} days ago" +%s 2>/dev/null \
@@ -187,13 +244,13 @@ if [[ "$RETENTION_DAYS" -gt 0 ]]; then
         if [[ "$FILE_EPOCH" -lt "$CUTOFF_DATE" ]]; then
             log INFO "Menghapus file lama: $FILE_NAME"
             rclone delete \
-                "${RCLONE_REMOTE}${R2_BUCKET}/${R2_PREFIX}/${FILE_NAME}" \
-                --s3-no-check-bucket 2>>"$LOG_FILE" \
+                "R2:${R2_BUCKET}/${R2_PREFIX}/${FILE_NAME}" \
+                2>>"$LOG_FILE" \
                 && DELETED_COUNT=$(( DELETED_COUNT + 1 ))
         fi
     done < <(rclone lsl \
-        "${RCLONE_REMOTE}${R2_BUCKET}/${R2_PREFIX}/" \
-        --s3-no-check-bucket 2>>"$LOG_FILE" | grep "\.dump\.gz$" || true)
+        "R2:${R2_BUCKET}/${R2_PREFIX}/" \
+        2>>"$LOG_FILE" | grep "\.dump\.gz$" || true)
 
     log OK "Retensi selesai: ${DELETED_COUNT} file lama dihapus."
 fi
@@ -204,8 +261,8 @@ fi
 
 log INFO "File backup di r2://${R2_BUCKET}/${R2_PREFIX}/:"
 rclone lsl \
-    "${RCLONE_REMOTE}${R2_BUCKET}/${R2_PREFIX}/" \
-    --s3-no-check-bucket 2>>"$LOG_FILE" \
+    "R2:${R2_BUCKET}/${R2_PREFIX}/" \
+    2>>"$LOG_FILE" \
     | grep "\.dump\.gz$" \
     | while read -r size date time name; do
         echo -e "  \033[0;36m→\033[0m ${name}  (${size} bytes | ${date} ${time})"
