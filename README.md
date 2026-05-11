@@ -38,7 +38,7 @@ Setup pointing domain ke Nginx sebagai reverse proxy atau static file server, se
 **Usage:**
 
 ```bash
-sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \
+sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \\
   | sudo bash -s -- <domain> <email> [port]
 ```
 
@@ -46,11 +46,11 @@ sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-dom
 
 ```bash
 # Reverse proxy ke aplikasi di port 3000
-sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \
+sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \\
   | sudo bash -s -- myapp.com admin@myapp.com 3000
 
 # Static file / web root (port 80)
-sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \
+sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-domain-nginx.sh \\
   | sudo bash -s -- myapp.com admin@myapp.com
 ```
 
@@ -78,12 +78,12 @@ Clone seluruh database PostgreSQL dari server origin ke server clone melalui kon
 
 ```
 [Server Clone] ──── pg_dump remote ───► [Server Origin]
-                                               │
-                          dump file ◄──────────┘
-                               │
-                     pg_restore (lokal)
-                               │
-                        DB Clone ✅
+       │
+  dump file ◄──────────┘
+       │
+ pg_restore (lokal)
+       │
+  DB Clone ✅
 ```
 
 **Cara pakai:**
@@ -125,20 +125,23 @@ CLONE_DB="yourdb_clone"
 
 Docker image untuk backup PostgreSQL secara otomatis: dump → gzip → upload ke **Cloudflare R2** atau S3-compatible Object Storage.
 
+**✨ Fitur v5 — Zero Disk Usage:**
+- **Streaming pipeline** — `pg_dump | gzip | rclone rcat` langsung ke R2 tanpa tulis ke disk
+- **Disk usage: 0 bytes** (sebelumnya: ~2x ukuran database)
+- **PostgreSQL 18** client support (install via PGDG official APT repo)
+- TCP keepalive built-in untuk koneksi remote yang stabil
+- Retensi otomatis: hapus file backup lama di R2
+- Version check otomatis pg_dump vs server PostgreSQL
+- Logging versi semua tools untuk diagnosis
+- Support `linux/amd64` dan `linux/arm64`
+
 **Image:**
 
 ```
 ghcr.io/abilfida/toolsh/pg-dump-to-r2:latest
 ```
 
-**Fitur:**
-- `pg_dump` streaming langsung di-pipe ke `gzip` (hemat disk)
-- Upload ke Cloudflare R2 / S3 via `rclone` tanpa file konfigurasi
-- TCP keepalive bawaan untuk koneksi remote yang stabil
-- Retensi otomatis: hapus file backup lama di R2
-- Verifikasi list file setelah upload
-- Semua konfigurasi via environment variables
-- Support `linux/amd64` dan `linux/arm64`
+---
 
 ### Cara Pakai
 
@@ -157,6 +160,13 @@ DB_USER=your_db_user
 DB_PASSWORD=your_db_password
 DB_NAME=your_db_name
 
+# TCP Keepalive (opsional - untuk koneksi remote)
+DB_KEEPALIVES=1
+DB_KEEPALIVES_IDLE=30
+DB_KEEPALIVES_INTERVAL=10
+DB_KEEPALIVES_COUNT=5
+DB_CONNECT_TIMEOUT=30
+
 # Cloudflare R2
 R2_ACCOUNT_ID=your_cloudflare_account_id
 R2_ACCESS_KEY_ID=your_r2_access_key_id
@@ -164,33 +174,35 @@ R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
 R2_BUCKET=your-bucket-name
 R2_PREFIX=pg-backups
 
-# Opsi dump (opsional)
-COMPRESS_LEVEL=9
+# Opsi backup (opsional)
+COMPRESS_LEVEL=6
 RETENTION_DAYS=7
 ```
 
 **2. Jalankan:**
 
 ```bash
-docker run --rm --env-file .env --network host \
+docker run --rm --env-file .env --network host \\
   ghcr.io/abilfida/toolsh/pg-dump-to-r2:latest
 ```
 
 **Atau inline dengan `-e`:**
 
 ```bash
-docker run --rm \
-  -e DB_HOST=127.0.0.1 \
-  -e DB_USER=myuser \
-  -e DB_PASSWORD=mypassword \
-  -e DB_NAME=mydb \
-  -e R2_ACCOUNT_ID=xxxx \
-  -e R2_ACCESS_KEY_ID=xxxx \
-  -e R2_SECRET_ACCESS_KEY=xxxx \
-  -e R2_BUCKET=my-bucket \
-  --network host \
+docker run --rm \\
+  -e DB_HOST=127.0.0.1 \\
+  -e DB_USER=myuser \\
+  -e DB_PASSWORD=mypassword \\
+  -e DB_NAME=mydb \\
+  -e R2_ACCOUNT_ID=xxxx \\
+  -e R2_ACCESS_KEY_ID=xxxx \\
+  -e R2_SECRET_ACCESS_KEY=xxxx \\
+  -e R2_BUCKET=my-bucket \\
+  --network host \\
   ghcr.io/abilfida/toolsh/pg-dump-to-r2:latest
 ```
+
+---
 
 ### Kubernetes CronJob
 
@@ -220,7 +232,7 @@ metadata:
   name: pg-dump-to-r2
   namespace: default
 spec:
-  schedule: "0 2 * * *"   # Setiap hari jam 02:00
+  schedule: "0 2 * * *"  # Setiap hari jam 02:00
   jobTemplate:
     spec:
       template:
@@ -235,6 +247,8 @@ spec:
                     name: pg-dump-r2-secret
 ```
 
+---
+
 ### Environment Variables
 
 | Variabel | Default | Wajib | Keterangan |
@@ -244,31 +258,94 @@ spec:
 | `DB_USER` | — | ✅ | Username PostgreSQL |
 | `DB_PASSWORD` | — | ✅ | Password PostgreSQL |
 | `DB_NAME` | — | ✅ | Nama database |
+| `DB_KEEPALIVES` | `1` | — | Enable TCP keepalive |
+| `DB_KEEPALIVES_IDLE` | `30` | — | Idle time (detik) sebelum kirim probe |
+| `DB_KEEPALIVES_INTERVAL` | `10` | — | Interval (detik) antar probe |
+| `DB_KEEPALIVES_COUNT` | `5` | — | Jumlah probe gagal sebelum putus |
+| `DB_CONNECT_TIMEOUT` | `30` | — | Timeout koneksi (detik) |
+| `DB_TCP_USER_TIMEOUT` | `60000` | — | TCP user timeout (milidetik) |
 | `R2_ACCOUNT_ID` | — | ✅ | Cloudflare Account ID |
 | `R2_ACCESS_KEY_ID` | — | ✅ | R2 API Access Key ID |
 | `R2_SECRET_ACCESS_KEY` | — | ✅ | R2 API Secret Access Key |
 | `R2_BUCKET` | — | ✅ | Nama bucket R2 |
 | `R2_PREFIX` | `pg-backups` | — | Subfolder di dalam bucket |
-| `R2_ENDPOINT` | Auto dari `R2_ACCOUNT_ID` | — | Custom S3 endpoint (override) |
-| `COMPRESS_LEVEL` | `9` | — | Level kompresi gzip (1–9) |
+| `COMPRESS_LEVEL` | `6` | — | Level kompresi gzip (1–9) |
 | `RETENTION_DAYS` | `7` | — | Hapus file lebih dari N hari (0 = nonaktif) |
-| `DUMP_DIR` | `/tmp` | — | Direktori sementara file dump |
-| `LOCK_WAIT_TIMEOUT` | `120s` | — | Timeout tunggu lock `pg_dump` |
+
+---
+
+### Build dengan Versi PostgreSQL Spesifik
+
+Jika server PostgreSQL kamu versi 16 atau 17, rebuild image dengan `PG_MAJOR` build arg:
+
+```bash
+# PostgreSQL 16
+docker build --build-arg PG_MAJOR=16 -t pg-dump-to-r2:pg16 ./pg-dump-to-r2
+
+# PostgreSQL 17
+docker build --build-arg PG_MAJOR=17 -t pg-dump-to-r2:pg17 ./pg-dump-to-r2
+
+# PostgreSQL 18 (default)
+docker build -t pg-dump-to-r2:pg18 ./pg-dump-to-r2
+```
+
+---
 
 ### Cara Restore dari R2
 
 ```bash
 # 1. Download file dump dari R2 ke lokal
-rclone copy \
-  ":s3,provider=Cloudflare,access_key_id=KEY,secret_access_key=SECRET,endpoint=https://ACCOUNT_ID.r2.cloudflarestorage.com:BUCKET/pg-backups/" \
+rclone copy \\
+  ":s3,provider=Cloudflare,access_key_id=KEY,secret_access_key=SECRET,endpoint=https://ACCOUNT_ID.r2.cloudflarestorage.com:BUCKET/pg-backups/" \\
   /tmp/ --include "*.dump.gz"
 
 # 2. Decompress + restore
-gunzip -c /tmp/mydb_20260509_020000.dump.gz \
-  | PGPASSWORD="pass" pg_restore \
-      -h 127.0.0.1 -U postgres -d mydb_restore \
-      --no-owner --no-acl
+gunzip -c /tmp/mydb_20260511_020000.dump.gz \\
+  | PGPASSWORD="pass" psql \\
+      -h 127.0.0.1 -U postgres -d mydb_restore
 ```
+
+---
+
+### Performance & Disk Usage
+
+**v5 menggunakan streaming pipeline — tidak ada file temporary di disk:**
+
+```
+pg_dump stdout  →  gzip stdin/stdout  →  rclone rcat stdin  →  R2
+                                                             ^
+                                                             └─ upload langsung
+```
+
+| Database Size | Terkompresi | Bandwidth | Estimasi Durasi | Disk Usage |
+|---------------|-------------|-----------|-----------------|------------|
+| 1 GB | ~300 MB | 100 Mbps | ~30 detik | **0 bytes** |
+| 5 GB | ~1.5 GB | 100 Mbps | ~2 menit | **0 bytes** |
+| 10 GB | ~3 GB | 100 Mbps | ~4 menit | **0 bytes** |
+| 10 GB | ~3 GB | 500 Mbps | ~50 detik | **0 bytes** |
+
+---
+
+### Troubleshooting
+
+#### Error: `pg_dump GAGAL dengan exit code: 1`
+
+**Cek log error:**
+```bash
+kubectl logs -n <namespace> <pod-name>
+```
+
+Kemungkinan penyebab:
+1. **Version mismatch** — `pg_dump` client < server PostgreSQL
+   - Solusi: Rebuild image dengan `--build-arg PG_MAJOR=<versi-server>`
+2. **TCP timeout** — koneksi putus di tengah dump (database besar)
+   - Solusi: Sudah di-fix di v5 dengan TCP keepalive di DSN
+3. **Permission denied** — user tidak punya akses ke database
+   - Solusi: Grant privilege `pg_dump` ke user
+
+#### Progress tidak tampil
+
+Normal untuk streaming mode — `rclone rcat` tidak tahu total size karena baca dari stdin. Yang penting: **speed tidak 0** berarti data mengalir.
 
 ---
 
