@@ -7,7 +7,7 @@ Kumpulan script dan Docker image untuk persiapan, manajemen, dan otomasi server 
 ## 📦 Daftar Tools
 
 | Tool | Tipe | Deskripsi |
-|------|------|-----------|
+|------|------|----------|
 | [`setup-swap.sh`](#setup-swapsh) | Shell Script | Setup swap memory di server |
 | [`setup-domain-nginx.sh`](#setup-domain-nginxsh) | Shell Script | Setup domain Nginx + SSL Let's Encrypt |
 | [`pg_clone.sh`](#pg_clonesh) | Shell Script | Clone database PostgreSQL antar server via remote |
@@ -30,6 +30,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-swa
 Setup pointing domain ke Nginx sebagai reverse proxy atau static file server, sekaligus install SSL otomatis via Let's Encrypt (Certbot).
 
 **Fitur:**
+
 - Install & konfigurasi Nginx otomatis
 - Support reverse proxy ke port aplikasi
 - Install SSL Let's Encrypt dengan Certbot
@@ -54,8 +55,10 @@ sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-dom
   | sudo bash -s -- myapp.com admin@myapp.com
 ```
 
+**Parameter:**
+
 | Parameter | Wajib | Keterangan |
-|-----------|-------|------------|
+|-----------|:-----:|------------|
 | `domain` | ✅ | Domain yang akan di-setup (contoh: `myapp.com`) |
 | `email` | ✅ | Email untuk notifikasi SSL Let's Encrypt |
 | `port` | ❌ | Port aplikasi untuk reverse proxy (default: `80`) |
@@ -67,6 +70,7 @@ sudo curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/setup-dom
 Clone seluruh database PostgreSQL dari server origin ke server clone melalui koneksi remote. Script dijalankan dari **server tujuan (clone)**, menembak langsung ke server sumber (origin).
 
 **Fitur:**
+
 - Dump otomatis dari server origin via `pg_dump` custom format
 - Drop & recreate database tujuan sebelum restore
 - Memutus koneksi aktif ke DB tujuan sebelum drop
@@ -79,11 +83,11 @@ Clone seluruh database PostgreSQL dari server origin ke server clone melalui kon
 ```
 [Server Clone] ──── pg_dump remote ───► [Server Origin]
        │
-  dump file ◄──────────┘
+   dump file ◄──────────┘
        │
- pg_restore (lokal)
+  pg_restore (lokal)
        │
-  DB Clone ✅
+   DB Clone ✅
 ```
 
 **Cara pakai:**
@@ -125,7 +129,8 @@ CLONE_DB="yourdb_clone"
 
 Docker image untuk backup PostgreSQL secara otomatis: dump → gzip → upload ke **Cloudflare R2** atau S3-compatible Object Storage.
 
-**✨ Fitur v5 — Zero Disk Usage:**
+### ✨ Fitur v5 — Zero Disk Usage
+
 - **Streaming pipeline** — `pg_dump | gzip | rclone rcat` langsung ke R2 tanpa tulis ke disk
 - **Disk usage: 0 bytes** (sebelumnya: ~2x ukuran database)
 - **PostgreSQL 18** client support (install via PGDG official APT repo)
@@ -240,11 +245,11 @@ spec:
           restartPolicy: Never
           hostNetwork: true
           containers:
-            - name: pg-dump-to-r2
-              image: ghcr.io/abilfida/toolsh/pg-dump-to-r2:latest
-              envFrom:
-                - secretRef:
-                    name: pg-dump-r2-secret
+          - name: pg-dump-to-r2
+            image: ghcr.io/abilfida/toolsh/pg-dump-to-r2:latest
+            envFrom:
+            - secretRef:
+                name: pg-dump-r2-secret
 ```
 
 ---
@@ -252,7 +257,7 @@ spec:
 ### Environment Variables
 
 | Variabel | Default | Wajib | Keterangan |
-|----------|---------|-------|------------|
+|----------|---------|:-----:|------------|
 | `DB_HOST` | `127.0.0.1` | — | Host PostgreSQL |
 | `DB_PORT` | `5432` | — | Port PostgreSQL |
 | `DB_USER` | — | ✅ | Username PostgreSQL |
@@ -302,7 +307,7 @@ rclone copy \\
 # 2. Decompress + restore
 gunzip -c /tmp/mydb_20260511_020000.dump.gz \\
   | PGPASSWORD="pass" psql \\
-      -h 127.0.0.1 -U postgres -d mydb_restore
+  -h 127.0.0.1 -U postgres -d mydb_restore
 ```
 
 ---
@@ -312,13 +317,13 @@ gunzip -c /tmp/mydb_20260511_020000.dump.gz \\
 **v5 menggunakan streaming pipeline — tidak ada file temporary di disk:**
 
 ```
-pg_dump stdout  →  gzip stdin/stdout  →  rclone rcat stdin  →  R2
-                                                             ^
-                                                             └─ upload langsung
+pg_dump stdout → gzip stdin/stdout → rclone rcat stdin → R2
+                                         ^
+                                         └─ upload langsung
 ```
 
 | Database Size | Terkompresi | Bandwidth | Estimasi Durasi | Disk Usage |
-|---------------|-------------|-----------|-----------------|------------|
+|---------------|-------------|-----------|-----------------|:----------:|
 | 1 GB | ~300 MB | 100 Mbps | ~30 detik | **0 bytes** |
 | 5 GB | ~1.5 GB | 100 Mbps | ~2 menit | **0 bytes** |
 | 10 GB | ~3 GB | 100 Mbps | ~4 menit | **0 bytes** |
@@ -328,18 +333,22 @@ pg_dump stdout  →  gzip stdin/stdout  →  rclone rcat stdin  →  R2
 
 ### Troubleshooting
 
-#### Error: `pg_dump GAGAL dengan exit code: 1`
+#### Error: `pg_dump GAGAL` dengan exit code: 1
 
 **Cek log error:**
+
 ```bash
 kubectl logs -n <namespace> <pod-name>
 ```
 
-Kemungkinan penyebab:
+**Kemungkinan penyebab:**
+
 1. **Version mismatch** — `pg_dump` client < server PostgreSQL
    - Solusi: Rebuild image dengan `--build-arg PG_MAJOR=<versi-server>`
+
 2. **TCP timeout** — koneksi putus di tengah dump (database besar)
    - Solusi: Sudah di-fix di v5 dengan TCP keepalive di DSN
+
 3. **Permission denied** — user tidak punya akses ke database
    - Solusi: Grant privilege `pg_dump` ke user
 
@@ -352,7 +361,7 @@ Normal untuk streaming mode — `rclone rcat` tidak tahu total size karena baca 
 ## Requirements
 
 | Tool | Versi Minimum | Keterangan |
-|------|--------------|------------|
+|------|---------------|------------|
 | Bash | 4.0+ | Semua script |
 | PostgreSQL Client | 14+ | `pg_clone.sh`, `pg-dump-to-r2` |
 | Nginx | 1.18+ | `setup-domain-nginx.sh` |
