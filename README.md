@@ -538,52 +538,6 @@ ALTER USER your_user CREATEDB;
 
 ---
 
-### Performance & Disk Usage
-
-**v5 menggunakan streaming pipeline — tidak ada file temporary di disk:**
-
-```
-pg_dump stdout → gzip stdin/stdout → rclone rcat stdin → R2
-                                         ^
-                                         └─ upload langsung
-```
-
-| Database Size | Terkompresi | Bandwidth | Estimasi Durasi | Disk Usage |
-|---------------|-------------|-----------|-----------------|:----------:|
-| 1 GB | ~300 MB | 100 Mbps | ~30 detik | **0 bytes** |
-| 5 GB | ~1.5 GB | 100 Mbps | ~2 menit | **0 bytes** |
-| 10 GB | ~3 GB | 100 Mbps | ~4 menit | **0 bytes** |
-| 10 GB | ~3 GB | 500 Mbps | ~50 detik | **0 bytes** |
-
----
-
-### Troubleshooting
-
-#### Error: `pg_dump GAGAL` dengan exit code: 1
-
-**Cek log error:**
-
-```bash
-kubectl logs -n <namespace> <pod-name>
-```
-
-**Kemungkinan penyebab:**
-
-1. **Version mismatch** — `pg_dump` client < server PostgreSQL
-   - Solusi: Rebuild image dengan `--build-arg PG_MAJOR=<versi-server>`
-
-2. **TCP timeout** — koneksi putus di tengah dump (database besar)
-   - Solusi: Sudah di-fix di v5 dengan TCP keepalive di DSN
-
-3. **Permission denied** — user tidak punya akses ke database
-   - Solusi: Grant privilege `pg_dump` ke user
-
-#### Progress tidak tampil
-
-Normal untuk streaming mode — `rclone rcat` tidak tahu total size karena baca dari stdin. Yang penting: **speed tidak 0** berarti data mengalir.
-
----
-
 ## Requirements
 
 | Tool | Versi Minimum | Keterangan |
