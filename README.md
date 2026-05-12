@@ -12,6 +12,7 @@ Kumpulan script dan Docker image untuk persiapan, manajemen, dan otomasi server 
 | [`setup-domain-nginx.sh`](#setup-domain-nginxsh) | Shell Script | Setup domain Nginx + SSL Let's Encrypt |
 | [`pg_clone.sh`](#pg_clonesh) | Shell Script | Clone database PostgreSQL antar server via remote |
 | [`pg-dump-to-r2`](#pg-dump-to-r2-docker-image) | Docker Image | Dump PostgreSQL → gzip → upload ke Cloudflare R2 / S3 |
+| [`r2-to-pg`](#r2-to-pg-docker-image) | Docker Image | Restore PostgreSQL dari Cloudflare R2 / S3 → gunzip → psql |
 
 ---
 
@@ -308,6 +309,231 @@ rclone copy \\
 gunzip -c /tmp/mydb_20260511_020000.dump.gz \\
   | PGPASSWORD="pass" psql \\
   -h 127.0.0.1 -U postgres -d mydb_restore
+```
+
+---
+
+## r2-to-pg (Docker Image)
+
+Docker image untuk restore PostgreSQL secara otomatis: download dari **Cloudflare R2** / S3-compatible Object Storage → gunzip → restore ke PostgreSQL.
+
+### ✨ Fitur v1 — Zero Disk Usage
+
+- **Streaming pipeline** — `rclone cat | gunzip | psql` langsung tanpa tulis ke disk
+- **Disk usage: 0 bytes** — tidak ada file temporary
+- **Auto-select backup** — pilih file *.dump.gz terbaru dari R2 prefix
+- **Explicit file option** — restore file tertentu via `R2_OBJECT`
+- **Clean restore mode** — drop & recreate database sebelum restore
+- **Post-restore ANALYZE** — optional VACUUM ANALYZE untuk optimasi
+- **PostgreSQL 18** client support (override via build arg)
+- **TCP keepalive built-in** untuk koneksi stabil
+- Support `linux/amd64` dan `linux/arm64`
+
+**Image:**
+
+```
+ghcr.io/abilfida/toolsh/r2-to-pg:latest
+```
+
+---
+
+### Cara Pakai
+
+**1. Buat file `.env`:**
+
+```bash
+cp r2-to-pg/.env.example .env
+# Edit .env sesuai konfigurasi
+```
+
+```env
+# Database Target
+DB_HOST=127.0.0.1
+DB_PORT=5432
+DB_USER=your_db_user
+DB_PASSWORD=your_db_password
+DB_NAME=your_db_name
+DB_ADMIN_DB=postgres
+
+# Cloudflare R2
+R2_ACCOUNT_ID=your_cloudflare_account_id
+R2_ACCESS_KEY_ID=your_r2_access_key_id
+R2_SECRET_ACCESS_KEY=your_r2_secret_access_key
+R2_BUCKET=your-bucket-name
+R2_PREFIX=pg-backups
+
+# Opsional: restore file tertentu (kosong = auto-select terbaru)
+R2_OBJECT=mydb_20260513_020000.dump.gz
+
+# Opsi restore
+CLEAN_BEFORE_RESTORE=true
+CREATE_DB_IF_NOT_EXISTS=true
+POST_RESTORE_ANALYZE=false
+```
+
+**2. Jalankan:**
+
+```bash
+docker run --rm --env-file .env --network host \
+  ghcr.io/abilfida/toolsh/r2-to-pg:latest
+```
+
+**Atau inline dengan `-e`:**
+
+```bash
+docker run --rm \
+  -e DB_HOST=127.0.0.1 \
+  -e DB_USER=myuser \
+  -e DB_PASSWORD=mypassword \
+  -e DB_NAME=mydb \
+  -e R2_ACCOUNT_ID=xxxx \
+  -e R2_ACCESS_KEY_ID=xxxx \
+  -e R2_SECRET_ACCESS_KEY=xxxx \
+  -e R2_BUCKET=my-bucket \
+  --network host \
+  ghcr.io/abilfida/toolsh/r2-to-pg:latest
+```
+
+---
+
+### Restore Mode
+
+| Mode | `CLEAN_BEFORE_RESTORE` | Behavior |
+|------|:----------------------:|----------|
+| Clean | `true` | Drop database, terminate koneksi aktif, recreate, restore |
+| Append | `false` | Restore ke database existing (data bisa duplicate) |
+
+**Rekomendasi:** Gunakan `CLEAN_BEFORE_RESTORE=true` untuk restore penuh dari backup.
+
+---
+
+### Kubernetes Job (One-shot Restore)
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: r2-to-pg-secret
+  namespace: default
+type: Opaque
+stringData:
+  DB_HOST: "127.0.0.1"
+  DB_PORT: "5432"
+  DB_USER: "your_db_user"
+  DB_PASSWORD: "your_db_password"
+  DB_NAME: "your_db_name"
+  DB_ADMIN_DB: "postgres"
+  R2_ACCOUNT_ID: "your_cf_account_id"
+  R2_ACCESS_KEY_ID: "your_r2_key_id"
+  R2_SECRET_ACCESS_KEY: "your_r2_secret"
+  R2_BUCKET: "your-bucket"
+  R2_PREFIX: "pg-backups"
+  CLEAN_BEFORE_RESTORE: "true"
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: r2-to-pg-restore
+  namespace: default
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+      hostNetwork: true
+      containers:
+      - name: r2-to-pg
+        image: ghcr.io/abilfida/toolsh/r2-to-pg:latest
+        envFrom:
+        - secretRef:
+            name: r2-to-pg-secret
+```
+
+---
+
+### Environment Variables
+
+| Variabel | Default | Wajib | Keterangan |
+|----------|---------|:-----:|------------|
+| `DB_HOST` | `127.0.0.1` | — | Host PostgreSQL target |
+| `DB_PORT` | `5432` | — | Port PostgreSQL target |
+| `DB_USER` | `postgres` | ✅ | Username PostgreSQL |
+| `DB_PASSWORD` | — | ✅ | Password PostgreSQL |
+| `DB_NAME` | — | ✅ | Nama database target |
+| `DB_ADMIN_DB` | `postgres` | — | Database untuk admin ops (drop/create) |
+| `R2_ACCOUNT_ID` | — | ✅ | Cloudflare Account ID |
+| `R2_ACCESS_KEY_ID` | — | ✅ | R2 API Access Key ID |
+| `R2_SECRET_ACCESS_KEY` | — | ✅ | R2 API Secret Access Key |
+| `R2_BUCKET` | — | ✅ | Nama bucket R2 |
+| `R2_PREFIX` | `pg-backups` | — | Subfolder di dalam bucket |
+| `R2_OBJECT` | — | — | File spesifik (kosong = auto-select terbaru) |
+| `CLEAN_BEFORE_RESTORE` | `true` | — | Drop/recreate DB sebelum restore |
+| `CREATE_DB_IF_NOT_EXISTS` | `true` | — | Buat DB jika belum ada (mode append) |
+| `POST_RESTORE_ANALYZE` | `false` | — | Jalankan VACUUM ANALYZE setelah restore |
+| `DB_CONNECT_TIMEOUT` | `30` | — | Timeout koneksi (detik) |
+
+---
+
+### Build dengan Versi PostgreSQL Spesifik
+
+```bash
+# PostgreSQL 16
+docker build --build-arg PG_MAJOR=16 -t r2-to-pg:pg16 ./r2-to-pg
+
+# PostgreSQL 17
+docker build --build-arg PG_MAJOR=17 -t r2-to-pg:pg17 ./r2-to-pg
+
+# PostgreSQL 18 (default)
+docker build -t r2-to-pg:pg18 ./r2-to-pg
+```
+
+---
+
+### Performance & Disk Usage
+
+**Streaming pipeline — tidak ada file temporary di disk:**
+
+```
+R2 object → rclone cat stdout → gunzip stdin → psql stdin → PostgreSQL
+                                          ^
+                                          └─ restore langsung
+```
+
+| Backup Size (compressed) | Bandwidth | Estimasi Durasi | Disk Usage |
+|--------------------------|-----------|-----------------|:----------:|
+| 300 MB | 100 Mbps | ~30 detik | **0 bytes** |
+| 1.5 GB | 100 Mbps | ~2 menit | **0 bytes** |
+| 3 GB | 100 Mbps | ~4 menit | **0 bytes** |
+| 3 GB | 500 Mbps | ~50 detik | **0 bytes** |
+
+---
+
+### Troubleshooting
+
+#### Error: `Restore pipeline GAGAL`
+
+**Cek log error:**
+
+```bash
+kubectl logs -n <namespace> <pod-name>
+```
+
+**Kemungkinan penyebab:**
+
+1. **File tidak ditemukan di R2** — cek `R2_PREFIX` dan `R2_OBJECT`
+2. **Koneksi DB gagal** — cek `DB_HOST`, `DB_USER`, `DB_PASSWORD`
+3. **Permission denied** — user tidak punya hak drop/create database
+
+#### Error: `dropdb gagal / createdb gagal`
+
+**Solusi:** Pastikan `DB_USER` punya hak superuser atau minimal `CREATEDB` role.
+
+```sql
+ALTER USER your_user CREATEDB;
+```
+
+#### Error: `pg_terminate_backend gagal`
+
+**Solusi:** Jalankan dari pod dengan `hostNetwork: true` agar bisa terminate koneksi lokal.
 ```
 
 ---
