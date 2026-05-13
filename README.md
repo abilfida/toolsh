@@ -534,7 +534,6 @@ ALTER USER your_user CREATEDB;
 #### Error: `pg_terminate_backend gagal`
 
 **Solusi:** Jalankan dari pod dengan `hostNetwork: true` agar bisa terminate koneksi lokal.
-```
 
 ---
 
