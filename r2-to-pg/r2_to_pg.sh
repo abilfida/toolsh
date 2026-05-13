@@ -283,10 +283,9 @@ RESTORE_START=$(date +%s)
   rclone cat "${RESTORE_SOURCE}" \
     --retries=5 \
     --retries-sleep=15s \
-    --log-level=INFO \
-    --stats=60s \
-    2>&1 | tee -a "$LOG_FILE"
-  echo ${PIPESTATUS[0]} > "${PIPE_STATUS_FILE}_rclone"
+    --log-level=ERROR \
+    2>>"$LOG_FILE"
+  echo $? > "${PIPE_STATUS_FILE}_rclone"
 ) | (
   gunzip -c
   echo $? > "${PIPE_STATUS_FILE}_gunzip"
