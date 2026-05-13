@@ -195,15 +195,18 @@ fi
 
 log OK "Koneksi database OK."
 
-DB_EXISTS=$(
+DB_EXISTS_OUTPUT=$(
   psql \
     -h "$DB_HOST" -p "$DB_PORT" \
     -U "$DB_USER" -d "$DB_ADMIN_DB" \
-    -tAq \
-    -v dbname="$DB_NAME" \
-    -c "SELECT 1 FROM pg_database WHERE datname = :'dbname';" \
+    -tA \
+    -c "SELECT 1 FROM pg_database WHERE datname = '$DB_NAME';" \
     2>>"$LOG_FILE"
 )
+
+DB_EXISTS=$(echo "$DB_EXISTS_OUTPUT" | grep -q 1 && echo "1" || echo "")
+
+log INFO "DB check: DB_NAME='${DB_NAME}', DB_EXISTS='${DB_EXISTS:-empty}', raw_output='${DB_EXISTS_OUTPUT:-empty}'"
 
 if [[ "$CLEAN_BEFORE_RESTORE" == "true" ]]; then
   log INFO "Mode restore: CLEAN_BEFORE_RESTORE=true"
@@ -214,8 +217,7 @@ if [[ "$CLEAN_BEFORE_RESTORE" == "true" ]]; then
       -h "$DB_HOST" -p "$DB_PORT" \
       -U "$DB_USER" -d "$DB_ADMIN_DB" \
       -v ON_ERROR_STOP=1 \
-      -v dbname="$DB_NAME" \
-      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = :'dbname' AND pid <> pg_backend_pid();" \
+      -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DB_NAME' AND pid <> pg_backend_pid();" \
       >>"$LOG_FILE" 2>&1 || {
         log ERROR "Gagal terminate koneksi aktif ke ${DB_NAME}"
         exit 1
@@ -229,6 +231,10 @@ if [[ "$CLEAN_BEFORE_RESTORE" == "true" ]]; then
         log ERROR "dropdb gagal untuk ${DB_NAME}"
         exit 1
       }
+
+    log OK "Database ${DB_NAME} berhasil dihapus."
+  else
+    log INFO "Database '${DB_NAME}' belum ada, akan dibuat baru."
   fi
 
   log INFO "Create database ${DB_NAME}..."
