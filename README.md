@@ -11,6 +11,7 @@ Kumpulan script dan Docker image untuk persiapan, manajemen, dan otomasi server 
 | [`setup-swap.sh`](#setup-swapsh) | Shell Script | Setup swap memory di server |
 | [`setup-domain-nginx.sh`](#setup-domain-nginxsh) | Shell Script | Setup domain Nginx + SSL Let's Encrypt |
 | [`pg_clone.sh`](#pg_clonesh) | Shell Script | Clone database PostgreSQL antar server via remote |
+| [`k3s-uninstall.sh`](#k3s-uninstallsh) | Shell Script | Uninstall K3s server secara menyeluruh |
 | [`pg-dump-to-r2`](#pg-dump-to-r2-docker-image) | Docker Image | Dump PostgreSQL → gzip → upload ke Cloudflare R2 / S3 |
 | [`r2-to-pg`](#r2-to-pg-docker-image) | Docker Image | Restore PostgreSQL dari Cloudflare R2 / S3 → gunzip → psql |
 
@@ -123,6 +124,47 @@ CLONE_DB="yourdb_clone"
 ```
 
 > **Tips:** Untuk database besar pada koneksi remote, jalankan `pg_dump` langsung di server origin lalu transfer file dump ke server clone untuk menghindari TCP timeout.
+
+---
+
+## k3s-uninstall.sh
+
+Uninstall K3s server secara menyeluruh — stop service, hapus binary, bersihkan network interface, hapus semua direktori residual, termasuk opsi drain agent node untuk cluster multi-node.
+
+**Fitur:**
+
+- Konfirmasi interaktif sebelum eksekusi (safety guard)
+- Drain & delete agent/worker node dari cluster (opsional, untuk multi-node)
+- Jalankan uninstall script bawaan K3s secara otomatis
+- Bersihkan semua direktori residual: `/var/lib/rancher/k3s`, `/etc/rancher/k3s`, `/run/k3s`, `/run/flannel`, `/var/lib/kubelet`, `/var/lib/cni`
+- Opsi reboot otomatis setelah uninstall selesai
+- Output berwarna (info, sukses, peringatan, error)
+
+**Cara pakai:**
+
+```bash
+# Jalankan langsung via curl
+curl -fsSL https://raw.githubusercontent.com/abilfida/toolsh/main/k3s-uninstall.sh | sudo bash
+```
+
+Atau download lalu jalankan manual:
+
+```bash
+wget -O k3s-uninstall.sh https://raw.githubusercontent.com/abilfida/toolsh/main/k3s-uninstall.sh
+chmod +x k3s-uninstall.sh
+sudo ./k3s-uninstall.sh
+```
+
+**Langkah yang dijalankan script:**
+
+| Langkah | Aksi |
+|---------|------|
+| 1 | Drain & hapus agent/worker node (opsional, multi-node) |
+| 2 | Jalankan `/usr/local/bin/k3s-uninstall.sh` bawaan K3s |
+| 3 | Bersihkan semua direktori residual |
+| 4 | Reboot server (opsional, direkomendasikan) |
+
+> ⚠️ **Perhatian:** Script ini **tidak** menghapus data dari external datastore (misal: PostgreSQL eksternal) maupun data dari Kubernetes Persistent Volumes yang dibuat oleh pod.
 
 ---
 
@@ -547,6 +589,7 @@ ALTER USER your_user CREATEDB;
 | Certbot | Latest | `setup-domain-nginx.sh` |
 | Docker | 20.10+ | `pg-dump-to-r2` |
 | rclone | Latest | `pg-dump-to-r2` (sudah include di image) |
+| kubectl | 1.20+ | `k3s-uninstall.sh` (untuk multi-node) |
 
 ---
 
