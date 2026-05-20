@@ -19,6 +19,14 @@ print_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 print_warn()    { echo -e "${YELLOW}[WARN]${NC} $1"; }
 print_error()   { echo -e "${RED}[ERROR]${NC} $1"; }
 
+# Wrapper read yang selalu baca dari /dev/tty
+# (fix untuk curl | bash dimana stdin bukan terminal)
+prompt() {
+  local __var="$1"
+  local __msg="$2"
+  read -rp "$__msg" "$__var" </dev/tty
+}
+
 # =============================================================================
 # Banner
 # =============================================================================
@@ -30,7 +38,7 @@ echo ""
 print_warn "Script ini akan menghapus K3s beserta semua datanya!"
 print_warn "Pastikan kamu sudah backup data penting sebelum melanjutkan."
 echo ""
-read -rp "Lanjutkan uninstall? (yes/no): " CONFIRM
+prompt CONFIRM "Lanjutkan uninstall? (yes/no): "
 if [[ "$CONFIRM" != "yes" ]]; then
   print_info "Uninstall dibatalkan."
   exit 0
@@ -44,7 +52,7 @@ echo -e "${CYAN}--- Langkah 1: Drain & Hapus Agent Node (Multi-Node) ---${NC}"
 print_warn "Jika kamu menggunakan multi-node cluster, drain worker node terlebih dahulu."
 print_info "Untuk melihat semua node: kubectl get nodes"
 echo ""
-read -rp "Apakah ada agent/worker node yang perlu di-drain? (yes/no): " HAS_AGENTS
+prompt HAS_AGENTS "Apakah ada agent/worker node yang perlu di-drain? (yes/no): "
 
 if [[ "$HAS_AGENTS" == "yes" ]]; then
   # Tampilkan daftar node
@@ -54,7 +62,7 @@ if [[ "$HAS_AGENTS" == "yes" ]]; then
     echo ""
   fi
 
-  read -rp "Masukkan nama agent node (pisahkan dengan spasi jika lebih dari satu): " AGENT_NODES
+  prompt AGENT_NODES "Masukkan nama agent node (pisahkan dengan spasi jika lebih dari satu): "
 
   for NODE in $AGENT_NODES; do
     print_info "Draining node: $NODE ..."
@@ -72,7 +80,7 @@ if [[ "$HAS_AGENTS" == "yes" ]]; then
   print_warn "Jangan lupa jalankan perintah berikut di setiap agent node:"
   echo -e "  ${YELLOW}/usr/local/bin/k3s-agent-uninstall.sh${NC}"
   echo ""
-  read -rp "Tekan ENTER untuk lanjut ke uninstall server..."
+  prompt _PAUSE "Tekan ENTER untuk lanjut ke uninstall server..."
 else
   print_info "Melewati langkah drain agent node."
 fi
@@ -133,7 +141,7 @@ echo "  - Script ini TIDAK menghapus data dari external datastore (misal: Postgr
 echo "  - Script ini TIDAK menghapus data dari Kubernetes Persistent Volumes yang dibuat pod."
 echo ""
 
-read -rp "Lakukan reboot sekarang untuk membersihkan network interface & mount point? (yes/no): " DO_REBOOT
+prompt DO_REBOOT "Lakukan reboot sekarang untuk membersihkan network interface & mount point? (yes/no): "
 if [[ "$DO_REBOOT" == "yes" ]]; then
   print_info "Melakukan reboot dalam 3 detik..."
   sleep 3
